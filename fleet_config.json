@@ -1,0 +1,23 @@
+[
+  {
+    "nume": "Truck",
+    "capacitate": 25000,
+    "tahograf": true,
+    "echipaj": true,
+    "numar": 1
+  },
+  {
+    "nume": "Truck",
+    "capacitate": 25000,
+    "tahograf": true,
+    "echipaj": false,
+    "numar": 1
+  },
+  {
+    "nume": "Truck",
+    "capacitate": 25000,
+    "tahograf": true,
+    "echipaj": false,
+    "numar": 2
+  }
+]

@@ -1,0 +1,8 @@
+[
+  {
+    "pickup": "Mangalia",
+    "delivery": "Baia Mare",
+    "demand": 10000,
+    "time_limit_hrs": 24
+  }
+]
