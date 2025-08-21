@@ -16,155 +16,80 @@ def detect_command(city, requests):
             return i + 1
     return None
 
-def solve_vrp(start_city, pd_requests, coords, vehicle_profiles, routing_mode, src_map=None):
+def solve_vrp(start_city, pd_requests, coords, vehicle_profiles, routing_mode, allow_split=True, src_map=None):
     # PATCH: vehicle_count = len(vehicle_profiles) dacă ai profile_virtual deja "expandat"
     vehicle_count = len(vehicle_profiles)
     capacities = [vp['capacitate'] for vp in vehicle_profiles]
     pickups = [r['pickup'] for r in pd_requests]
     deliveries = [r['delivery'] for r in pd_requests]
-    
-    # Check if we need to force multiple vehicle usage
-    total_demand = sum(r['demand'] for r in pd_requests)
-    max_capacity = max(capacities)
-    
-    # If total demand exceeds max capacity, manually assign orders to vehicles
-    if total_demand > max_capacity:
-        print(f"DEBUG: Total demand ({total_demand}kg) exceeds max capacity ({max_capacity}kg). Using manual assignment.")
-        
-        # Sort vehicles by capacity (largest first)
-        vehicle_capacities = [(i, cap) for i, cap in enumerate(capacities)]
-        vehicle_capacities.sort(key=lambda x: x[1], reverse=True)
-        
-        # Sort orders by demand (largest first)
-        orders = [(i, r) for i, r in enumerate(pd_requests)]
-        orders.sort(key=lambda x: x[1]['demand'], reverse=True)
-        
-        # Assign orders to vehicles
-        vehicle_assignments = [[] for _ in range(vehicle_count)]
-        vehicle_loads = [0] * vehicle_count
-        
-        for order_idx, order in orders:
-            assigned = False
-            for veh_idx, veh_cap in vehicle_capacities:
-                if vehicle_loads[veh_idx] + order['demand'] <= veh_cap:
-                    vehicle_assignments[veh_idx].append(order_idx)
-                    vehicle_loads[veh_idx] += order['demand']
-                    assigned = True
-                    break
-            
-            if not assigned:
-                print(f"DEBUG: Cannot assign order {order_idx} to any vehicle!")
-                return None
-        
-        print(f"DEBUG: Vehicle assignments: {vehicle_assignments}")
-        print(f"DEBUG: Vehicle loads: {vehicle_loads}")
-        
-        # Now solve separate VRP problems for each vehicle
-        all_routes = []
-        all_polylines = []
-        total_cost = 0.0
-        
-        for veh_idx, order_indices in enumerate(vehicle_assignments):
-            if not order_indices:  # Skip unused vehicles
-                continue
-                
-            # Create sub-problem for this vehicle
-            sub_requests = [pd_requests[i] for i in order_indices]
-            sub_vehicle_profiles = [vehicle_profiles[veh_idx]]
-            sub_src_map = [src_map[veh_idx]] if src_map else None
-            
-            # Solve sub-problem
-            sub_result = solve_vrp_single_vehicle(
-                start_city, sub_requests, coords, sub_vehicle_profiles[0], 
-                routing_mode, sub_src_map
-            )
-            
-            if sub_result:
-                sub_routes, sub_cost, sub_polylines = sub_result
-                all_routes.extend(sub_routes)
-                all_polylines.extend(sub_polylines)
-                total_cost += sub_cost
-            else:
-                print(f"DEBUG: Failed to solve sub-problem for vehicle {veh_idx}")
-                return None
-        
-        return all_routes, total_cost, all_polylines
-    
-    # Original solver for when capacity constraints are not violated
-    return solve_vrp_original(start_city, pd_requests, coords, vehicle_profiles, routing_mode, src_map)
-
-def solve_vrp_single_vehicle(start_city, pd_requests, coords, vehicle_profile, routing_mode, src_map=None):
-    """Solve VRP for a single vehicle with multiple orders."""
-    # Create a single vehicle profile list
-    vehicle_profiles = [vehicle_profile]
-    src_map_list = [src_map] if src_map else None
-    
-    # Use the original solver with single vehicle
-    return solve_vrp_original(start_city, pd_requests, coords, vehicle_profiles, routing_mode, src_map_list)
-
-def solve_vrp_original(start_city, pd_requests, coords, vehicle_profiles, routing_mode, src_map=None):
-    # PATCH: vehicle_count = len(vehicle_profiles) dacă ai profile_virtual deja "expandat"
-    vehicle_count = len(vehicle_profiles)
-    capacities = [vp['capacitate'] for vp in vehicle_profiles]
-    pickups = [r['pickup'] for r in pd_requests]
-    deliveries = [r['delivery'] for r in pd_requests]
-    
-    # Create unique cities list, ensuring depot is first
-    cities = [start_city]
-    for city in pickups + deliveries:
-        if city not in cities:
-            cities.append(city)
-    
+    cities = [start_city] + list(dict.fromkeys(pickups + deliveries))
     idx = {city: i for i, city in enumerate(cities)}
 
     G = build_graph(coords)
-    dist_matrix = [
-        [get_distance(G, a, b) if a != b else 0 for b in cities]
-        for a in cities
-    ]
-    time_matrix = [
-        [get_duration(G, a, b) if a != b else 0 for b in cities]
-        for a in cities
-    ]
+    dist_matrix = [[0]*len(cities) for _ in range(len(cities))]
+    time_matrix = [[0]*len(cities) for _ in range(len(cities))]
 
-    manager = pywrapcp.RoutingIndexManager(len(cities), vehicle_count, idx[start_city])
+    for i in range(len(cities)):
+        for j in range(len(cities)):
+            if i == j:
+                dist = 0
+                dur = 0
+            else:
+                city_i = cities[i]
+                city_j = cities[j]
+                dist = get_distance(G, city_i, city_j)
+                dur = get_duration(G, city_i, city_j)
+            dist_matrix[i][j] = int(round(dist))
+            time_matrix[i][j] = int(round(dur))
+
+    # Build node list: depot, then all pickups, then all deliveries
+    node_list = []
+    node_types = []  # 'depot', 'pickup', 'delivery'
+    node_cities = [] # city name for each node
+    order_indices = [] # -1 for depot, otherwise order index
+
+    # 0: depot
+    node_list.append(start_city)
+    node_types.append('depot')
+    node_cities.append(start_city)
+    order_indices.append(-1)
+
+    # For each order, add pickup and delivery nodes
+    for i, order in enumerate(pd_requests):
+        # Pickup node
+        node_list.append(order['pickup'])
+        node_types.append('pickup')
+        node_cities.append(order['pickup'])
+        order_indices.append(i)
+        # Delivery node
+        node_list.append(order['delivery'])
+        node_types.append('delivery')
+        node_cities.append(order['delivery'])
+        order_indices.append(i)
+
+    N = len(node_list)
+    manager = pywrapcp.RoutingIndexManager(N, vehicle_count, 0)
     routing = pywrapcp.RoutingModel(manager)
 
-    # Use appropriate cost function based on mode
-    if routing_mode == "Fast":
-        # Fast mode: minimize total delivery time and delays
+    if routing_mode == "Timp minim":
         def time_callback(from_index, to_index):
-            from_node = manager.IndexToNode(from_index)
-            to_node = manager.IndexToNode(to_index)
-            # Focus on minimizing delivery time - no distance penalty
-            return int(time_matrix[from_node][to_node] * 3600)
+            return int(time_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)] * 3600)
         time_cb = routing.RegisterTransitCallback(time_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(time_cb)
-    else:  # Economic mode
-        # Economic mode: minimize distance and vehicle usage while avoiding delays
+    else:
         def distance_callback(from_index, to_index):
-            from_node = manager.IndexToNode(from_index)
-            to_node = manager.IndexToNode(to_index)
-            # Focus on minimizing distance and resource usage
-            return int(dist_matrix[from_node][to_node] * 1000)
+            return int(dist_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)] * 1000)
         dist_cb = routing.RegisterTransitCallback(distance_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(dist_cb)
 
     # Capacitate
-    demands = [0] * len(cities)
-    for r in pd_requests:
-        pickup_idx = idx[r['pickup']]
-        delivery_idx = idx[r['delivery']]
-        demands[pickup_idx] += r['demand']
-        demands[delivery_idx] -= r['demand']
+    demands = [0] * len(node_list)
+    for i, t in enumerate(node_types):
+        if t == 'pickup':
+            demands[i] = pd_requests[order_indices[i]]['demand']
+        elif t == 'delivery':
+            demands[i] = -pd_requests[order_indices[i]]['demand']
 
-    # Debug demand calculation
-    print(f"DEBUG: Demands array: {demands}")
-    print(f"DEBUG: Cities: {cities}")
-    print(f"DEBUG: Pickup demands: {[demands[idx[r['pickup']]] for r in pd_requests]}")
-    print(f"DEBUG: Total pickup demand: {sum(demands[idx[r['pickup']]] for r in pd_requests)}")
-
-    # RE-ENABLE CAPACITY CONSTRAINTS
     def demand_callback(from_index):
         return demands[manager.IndexToNode(from_index)]
     demand_cb = routing.RegisterUnaryTransitCallback(demand_callback)
@@ -173,104 +98,61 @@ def solve_vrp_original(start_city, pd_requests, coords, vehicle_profiles, routin
     )
     cap_dim = routing.GetDimensionOrDie('Capacity')
 
-    # Add constraint to force multiple vehicles when needed
-    total_demand = sum(r['demand'] for r in pd_requests)
-    max_capacity = max(capacities)
-    
-    # Add a penalty for not using vehicles to encourage multiple vehicle usage
-    if total_demand > max_capacity:
-        # Add a fixed cost for each vehicle to encourage using multiple vehicles
-        for vid in range(vehicle_count):
-            routing.SetFixedCostOfVehicle(1000, vid)  # Small fixed cost per vehicle
-    
-    # Add a constraint to ensure capacity is not exceeded at any point
-    for vid in range(vehicle_count):
-        routing.solver().Add(cap_dim.CumulVar(routing.End(vid)) <= capacities[vid])
-    
-    # Remove the problematic IfThenElse constraint - let the basic capacity constraints handle it
-
     # Pickup & delivery
-    # TEMPORARILY DISABLE PICKUP & DELIVERY FOR MULTIPLE ORDERS
-    if len(pd_requests) <= 3:  # Only enable for small number of orders
-        # RE-ENABLE PICKUP & DELIVERY CONSTRAINTS (simplified)
-        for r in pd_requests:
-            p_idx = manager.NodeToIndex(idx[r['pickup']])
-            d_idx = manager.NodeToIndex(idx[r['delivery']])
-            routing.AddPickupAndDelivery(p_idx, d_idx)
-            routing.solver().Add(routing.VehicleVar(p_idx) == routing.VehicleVar(d_idx))
-            # Add capacity constraint for pickup and delivery
-            routing.solver().Add(cap_dim.CumulVar(p_idx) <= cap_dim.CumulVar(d_idx))
-            # Ensure capacity is not exceeded at pickup
-            routing.solver().Add(cap_dim.CumulVar(p_idx) <= max_capacity)
+    for i, order in enumerate(pd_requests):
+        pickup_idx = 1 + 2*i      # pickup node index in node_list
+        delivery_idx = 1 + 2*i+1  # delivery node index in node_list
+        routing.AddPickupAndDelivery(manager.NodeToIndex(pickup_idx), manager.NodeToIndex(delivery_idx))
+        routing.solver().Add(routing.VehicleVar(manager.NodeToIndex(pickup_idx)) == routing.VehicleVar(manager.NodeToIndex(delivery_idx)))
+        routing.solver().Add(cap_dim.CumulVar(manager.NodeToIndex(pickup_idx)) <= cap_dim.CumulVar(manager.NodeToIndex(delivery_idx)))
 
     # TIME DIMENSION PE BAZĂ DE GRAFI
-    # TEMPORARILY DISABLE TIME DIMENSION
-    # service_time = [2 * 3600] * len(cities)
-    # def full_time_callback(from_index, to_index):
-    #     from_node = manager.IndexToNode(from_index)
-    #     to_node = manager.IndexToNode(to_index)
-    #     return int(time_matrix[from_node][to_node] * 3600 + service_time[from_node])
-    # full_time_cb = routing.RegisterTransitCallback(full_time_callback)
-    # routing.AddDimension(
-    #     full_time_cb,
-    #     0,
-    #     int(999 * 3600),  # maxim permis
-    #     True,
-    #     'Time'
-    # )
+    service_time = [2 * 3600] * len(node_list)
+    def full_time_callback(from_index, to_index):
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return int(time_matrix[from_node][to_node] * 3600 + service_time[from_node])
+    full_time_cb = routing.RegisterTransitCallback(full_time_callback)
+    routing.AddDimension(
+        full_time_cb,
+        0,
+        int(999 * 3600),
+        True,
+        'Time'
+    )
+    time_dim = routing.GetDimensionOrDie('Time')
+    # Set time windows for each node
+    for i, t in enumerate(node_types):
+        index = manager.NodeToIndex(i)
+        if t == 'depot' or t == 'pickup':
+            # Depot and pickup: wide time window
+            time_dim.CumulVar(index).SetRange(0, int(999 * 3600))
+        elif t == 'delivery':
+            # Set time window for delivery
+            order = pd_requests[order_indices[i]]
+            time_dim.CumulVar(index).SetRange(0, int(order['time_limit_hrs'] * 3600))
+        else:
+            # All other cities: wide time window
+            time_dim.CumulVar(index).SetRange(0, int(999 * 3600))
 
-    # Parametri solver - Proper routing modes
+    # After adding the 'Time' dimension
+    time_dim.SetGlobalSpanCostCoefficient(100)  # Tune this value
+
+    # Parametri solver
     params = pywrapcp.DefaultRoutingSearchParameters()
-    if routing_mode == "Economic":
-        # Economic mode: minimize distance and use fewer vehicles
+    if routing_mode == "Număr minim de vehicule":
+        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+    elif routing_mode == "Timp minim":
         params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
         params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-        params.time_limit.seconds = 30
-        # Focus on minimizing vehicles and distance
-        params.solution_limit = 100
-    elif routing_mode == "Fast":
-        # Fast mode: prioritize delivery time and minimize delays
-        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.TABU_SEARCH
-        params.time_limit.seconds = 25
-        # Focus on finding fast solutions quickly
-        params.solution_limit = 50
+        params.time_limit.seconds = 20
     else:
-        # Default fallback
         params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        params.time_limit.seconds = 25
-        params.solution_limit = 75
+    params.time_limit.seconds = 10
 
-    # Check if the problem is feasible
-    # Check if all cities are reachable from depot
-    for city in cities[1:]:  # Skip depot
-        try:
-            path_length = get_distance(G, start_city, city)
-        except Exception as e:
-            return None
-    
-    # Check if any single vehicle can handle the demand
-    max_capacity = max(capacities)
-    max_demand = max(r['demand'] for r in pd_requests)
-    total_demand = sum(r['demand'] for r in pd_requests)
-    
-    # Try solving without pickup & delivery constraints first
     solution = routing.SolveWithParameters(params)
-    
     if not solution:
         return None
-
-    # Debug: Check capacity usage for each vehicle
-    print(f"DEBUG: Solution found. Checking capacity usage...")
-    for vid in range(vehicle_count):
-        index = routing.Start(vid)
-        if routing.IsEnd(solution.Value(routing.NextVar(index))):
-            print(f"DEBUG: Vehicle {vid} not used")
-        else:
-            end_index = routing.End(vid)
-            final_capacity = cap_dim.CumulVar(end_index)
-            capacity_used = solution.Value(final_capacity)
-            print(f"DEBUG: Vehicle {vid} used, capacity: {capacity_used}/{capacities[vid]}")
 
     route_data = []
     polylines = []
@@ -283,7 +165,7 @@ def solve_vrp_original(start_city, pd_requests, coords, vehicle_profiles, routin
         route_seq = []
         while not routing.IsEnd(index):
             node_id = manager.IndexToNode(index)
-            route_seq.append(cities[node_id])
+            route_seq.append(node_list[node_id])
             index = solution.Value(routing.NextVar(index))
         route_seq.append(start_city)
 
@@ -298,34 +180,65 @@ def solve_vrp_original(start_city, pd_requests, coords, vehicle_profiles, routin
         polylines.append([coords[c]['coords'] for c in full_path])
 
         steps = []
-        steps.append({'tip': 'plecare', 'oras': start_city, 'distanta': 0, 'comanda': None})
-        for a, b in zip(full_path, full_path[1:]):
+        picked_up = set()
+        delivered = set()
+        orders_onboard = set()
+        current_capacity = 0
+
+        # Plecare din depot
+        steps.append({'tip': 'plecare', 'oras': start_city, 'distanta': 0, 'durata': 0, 'comanda': None})
+
+        for i in range(1, len(full_path)):
+            a = full_path[i - 1]
+            b = full_path[i]
             d = get_distance(G, a, b)
             dur = get_duration(G, a, b)
+            step_type = "intermediar"
+            comanda_id = None
+
+            # Caută întâi pickup
+            for j, order in enumerate(pd_requests):
+                if b == order['pickup'] and j not in picked_up:
+                    if current_capacity + order['demand'] <= capacities[vid]:
+                        step_type = "pickup"
+                        comanda_id = j + 1
+                        picked_up.add(j)
+                        orders_onboard.add(j)
+                        current_capacity += order['demand']
+                        break
+
+            # Apoi delivery (doar dacă s-a făcut pickup deja)
+            for j, order in enumerate(pd_requests):
+                if b == order['delivery'] and j in orders_onboard and j not in delivered:
+                    step_type = "delivery"
+                    comanda_id = j + 1
+                    delivered.add(j)
+                    orders_onboard.remove(j)
+                    current_capacity -= order['demand']
+                    break
+
+            # Dacă nu e nici pickup nici delivery pentru vehiculul curent, e tranzit/intermediar
             steps.append({
-                'tip': detect_step_type(b, pd_requests),
+                'tip': step_type,
                 'oras': b,
                 'distanta': d,
                 'durata': dur,
-                'comanda': detect_command(b, pd_requests)
+                'comanda': comanda_id
             })
-        steps.append({'tip': 'intoarcere', 'oras': start_city, 'distanta': 0, 'durata': 0, 'comanda': None})
 
-        total_dist = sum(step['distanta'] for step in steps)
-        total_cost += total_dist
-
-        # PATCH: etichetare vehicul
-        if src_map:
-            src_idx = src_map[vid]
-            veh_name = vehicle_profiles[src_idx]['nume'] if 'nume' in vehicle_profiles[src_idx] else f"Vehicul {src_idx+1}"
-            vehicul_label = veh_name
+        # -- Return to depot la final (dacă nu e deja acolo)
+        if len(full_path) > 1:
+            a = full_path[-2]
+            b = full_path[-1]
+            d = get_distance(G, a, b)
+            dur = get_duration(G, a, b)
         else:
-            vehicul_label = f"Vehicul {vid+1}"
+            d = 0
+            dur = 0
+        steps.append({'tip': 'intoarcere', 'oras': start_city, 'distanta': d, 'durata': dur, 'comanda': None})
 
-        route_data.append({
-            'vehicul': vehicle_profiles[vid],
-            'traseu': steps,
-            'cost_km': round(total_dist, 2),
-        })
+    for i, city in enumerate(node_list):
+        index = manager.NodeToIndex(i)
+        print(f"City: {city}, Time window: [{time_dim.CumulVar(index).Min() / 3600}, {time_dim.CumulVar(index).Max() / 3600}]")
 
     return route_data, round(total_cost, 2), polylines

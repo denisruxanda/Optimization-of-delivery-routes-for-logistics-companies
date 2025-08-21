@@ -14,7 +14,6 @@ def load_road_data(path):
     import json
     with open(path, encoding="utf-8") as f:
         return json.load(f)
-
 st.set_page_config(page_title="Delivery Route Optimization", layout="wide")
 
 # ---- State ----
@@ -139,14 +138,6 @@ if st.session_state.vehicle_profiles:
                 st.rerun()
             count += 1
 
-# ---- Routing Mode (must be before order form and any use of mode) ----
-st.sidebar.markdown("---")
-mode = st.sidebar.radio(
-    "Select routing mode:",
-    options=["Economic", "Fast"],
-    horizontal=False
-)
-
 # ------------------ Orders Sidebar -----------------
 st.sidebar.header("📦 Orders (pickup & delivery)")
 
@@ -155,12 +146,10 @@ with st.sidebar.form("request_form", clear_on_submit=False):
     p_cities = cities_placeholder
     if idx != -1 and len(st.session_state.requests) > idx:
         req = st.session_state.requests[idx]
-        pickup_idx = p_cities.index(req['pickup'])
-        delivery_idx = p_cities.index(req['delivery'])
-        pickup = st.selectbox("Pickup", p_cities, index=pickup_idx, key="pickup_req" if idx == -1 else None)
-        delivery = st.selectbox("Delivery", p_cities, index=delivery_idx, key="delivery_req" if idx == -1 else None)
-        demand = st.number_input("Quantity (kg)", min_value=1, value=int(req['demand']) if idx != -1 else 1000, step=100)
-        tl = st.number_input("Allocated time (h)", min_value=1, value=int(req['time_limit_hrs']) if idx != -1 else 24)
+        pickup = st.selectbox("Pickup", p_cities, index=p_cities.index(req['pickup']))
+        delivery = st.selectbox("Delivery", p_cities, index=p_cities.index(req['delivery']))
+        demand = st.number_input("Quantity (kg)", min_value=1, value=int(req['demand']), step=100)
+        tl = st.number_input("Allocated time (h)", min_value=1, value=int(req['time_limit_hrs']))
         labelr = "Save change"
         renunta = st.form_submit_button("Cancel edit")
         if renunta:
@@ -168,48 +157,39 @@ with st.sidebar.form("request_form", clear_on_submit=False):
             st.session_state.routes_generated = False
             st.rerun()
     else:
-        pickup_idx = 0
-        delivery_idx = 0
-        pickup = st.selectbox("Pickup", p_cities, index=pickup_idx, key="pickup_req")
-        delivery = st.selectbox("Delivery", p_cities, index=delivery_idx, key="delivery_req")
+        pickup = st.selectbox("Pickup", p_cities, index=0, key="pickup_req")
+        delivery = st.selectbox("Delivery", p_cities, index=0, key="delivery_req")
         demand = st.number_input("Quantity (kg)", min_value=1, value=1000, step=100)
         tl = st.number_input("Allocated time (h)", min_value=1, value=24)
         labelr = "Add order"
     max_cap = max([v['capacitate'] for v in st.session_state.vehicle_profiles], default=0)
-    is_oversized = demand > max_cap
-
+    show_divisible = demand > max_cap
+    if show_divisible:
+        divizibil = st.checkbox("Divisible load", value=True)
+        st.session_state.allow_split = divizibil
+    else:
+        st.session_state.allow_split = False
     salveazar = st.form_submit_button(labelr)
     if salveazar:
         if pickup == placeholder or delivery == placeholder:
             st.warning("Please select both Pickup and Delivery cities.")
         else:
-            # Check if quantity exceeds maximum vehicle capacity
-            max_vehicle_capacity = max([v['capacitate'] for v in st.session_state.vehicle_profiles], default=0)
-            if demand > max_vehicle_capacity:
-                st.error(f"⚠️ **Order quantity exceeds vehicle capacity**\n\n"
-                        f"The order quantity ({demand:,} kg) exceeds the maximum vehicle capacity ({max_vehicle_capacity:,} kg).\n\n"
-                        f"**Please either:**\n"
-                        f"• Reduce the order quantity to {max_vehicle_capacity:,} kg or less\n"
-                        f"• Add vehicles with larger capacity\n"
-                        f"• Split this into multiple smaller orders")
+            req_nou = {
+                "pickup": pickup,
+                "delivery": delivery,
+                "demand": demand,
+                "time_limit_hrs": tl
+            }
+            if st.session_state.edit_index != -1:
+                st.session_state.requests[st.session_state.edit_index] = req_nou
+                st.session_state.edit_index = -1
+                st.session_state.routes_generated = False
+                st.success("Order modified.")
             else:
-                req_nou = {
-                    "pickup": pickup,
-                    "delivery": delivery,
-                    "demand": demand,
-                    "time_limit_hrs": tl,
-                    "divizibil": False
-                }
-                if idx != -1:
-                    st.session_state.requests[idx] = req_nou
-                    st.session_state.edit_index = -1
-                    st.session_state.routes_generated = False
-                    st.success("Order modified.")
-                else:
-                    st.session_state.requests.append(req_nou)
-                    st.session_state.routes_generated = False
-                    st.success("Order added.")
-                st.rerun()
+                st.session_state.requests.append(req_nou)
+                st.session_state.routes_generated = False
+                st.success("Order added.")
+            st.rerun()
 
 c1, c2 = st.sidebar.columns([1,1])
 with c1:
@@ -237,7 +217,14 @@ if st.session_state.requests:
                 st.session_state.edit_index = -1
             st.rerun()
 
-# ---- Routing controls ----
+# ---------------- Routing Mode ----------------
+st.sidebar.markdown("### Routing mode")
+mode = st.sidebar.radio(
+    "Select routing mode:",
+    options=["Economic", "Fast"],
+    horizontal=False
+)
+st.sidebar.markdown("---")
 gen_rute = st.sidebar.button("Generate routes", use_container_width=True)
 if gen_rute:
     st.session_state.routes_generated = True
@@ -264,71 +251,62 @@ if not st.session_state.requests or not st.session_state.vehicle_profiles:
     draw_initial_map(city_coords, start_city)
     st.stop()
 
-# -- Use actual fleet vehicles, not virtual ones --
+# -- Split requests if divisible --
+chunks = []
+if st.session_state.allow_split:
+    for r in st.session_state.requests:
+        rem = r['demand']
+        max_cap = max((v['capacitate'] for v in st.session_state.vehicle_profiles), default=0)
+        while rem > 0:
+            c = min(rem, max_cap)
+            rr = r.copy(); rr['demand'] = c
+            chunks.append(rr)
+            rem -= c
+else:
+    max_cap = max((v['capacitate'] for v in st.session_state.vehicle_profiles), default=0)
+    for r in st.session_state.requests:
+        if r['demand'] > max_cap:
+            st.error(f"Order {r['pickup']}→{r['delivery']} ({r['demand']}kg) exceeds the max capacity. Enable 'Divisible load' or add bigger vehicles.")
+            st.stop()
+    chunks = st.session_state.requests.copy()
+
+# -- Economical fleet: sort by capacity ascending (economic) --
 profile_expanded = []
 profile_src = []
-for idx, vp in enumerate(st.session_state.vehicle_profiles):
+for idx, vp in enumerate(sorted(st.session_state.vehicle_profiles, key=lambda v: v['capacitate'])):
     for _ in range(vp['numar']):
         profile_expanded.append(vp)
         profile_src.append(idx)
 
-# Order requests by time_limit_hrs (urgency)
-chunks = sorted(st.session_state.requests, key=lambda x: x['time_limit_hrs'])
+num_virtual_veh = max(len(chunks), len(profile_expanded))
+profile_virtual = (profile_expanded * (num_virtual_veh // len(profile_expanded) + 1))[:num_virtual_veh]
+profile_src = (profile_src * (num_virtual_veh // len(profile_src) + 1))[:num_virtual_veh]
+
+# --- Order requests by time_limit_hrs (urgency) ---
+chunks = sorted(chunks, key=lambda x: x['time_limit_hrs'])
 
 # -- Generate routes --
 if st.session_state.routes_generated:
-    # Check if all cities are connected
-    G = build_graph(city_coords)
-    all_cities = set()
-    for r in chunks:
-        all_cities.add(r['pickup'])
-        all_cities.add(r['delivery'])
-    all_cities.add(start_city)
-    
-    connected_cities = set(G.nodes())
-    missing_cities = all_cities - connected_cities
-    if missing_cities:
-        st.error(f"⚠️ Cities not in road network: {missing_cities}")
-        st.stop()
-    
-    # Check connectivity between pickup and delivery cities
-    for r in chunks:
-        try:
-            import networkx as nx
-            if not nx.has_path(G, r['pickup'], r['delivery']):
-                st.error(f"⚠️ No road connection between {r['pickup']} and {r['delivery']}. Please use cities that are connected in the road network.")
-                st.info("💡 Try these connected city pairs: Bucuresti ↔ Giurgiu, Cluj-Napoca ↔ Dej, Brasov ↔ Sibiu")
-                st.stop()
-        except:
-            pass
-    
-    try:
-        # Use basic solver directly - no more smart splitting
-        res = solve_vrp(
-            start_city=start_city,
-            pd_requests=chunks,
-            coords=city_coords,
-            vehicle_profiles=profile_expanded,
-            routing_mode=mode,
-            src_map=profile_src
-        )
-        if not res:
-            st.error("⚠️ Unable to generate route: not enough roads in the network for all requests or not enough vehicles. Increase vehicle number or allocated time.")
-            draw_initial_map(city_coords, start_city)
-            st.stop()
-        else:
-            rt, tc, pl = res
-            st.session_state.last_routes = rt
-            st.session_state.last_cost = tc
-            st.session_state.last_polylines = pl
-            
-            # Draw map and table first
-            draw_route_map(city_coords, start_city, st.session_state.last_polylines)
-            draw_table(st.session_state.last_routes, st.session_state.last_cost,
-                       min(r['time_limit_hrs'] for r in chunks))
-    except Exception as e:
-        st.error(f"⚠️ Error in solver: {str(e)}")
+    res = solve_vrp(
+        start_city=start_city,
+        pd_requests=chunks,
+        coords=city_coords,
+        vehicle_profiles=profile_virtual,
+        routing_mode=mode,
+        allow_split=st.session_state.allow_split,
+        src_map=profile_src
+    )
+    if not res:
+        st.error("⚠️ Unable to generate route: not enough roads in the network for all requests or not enough vehicles. Increase vehicle number or allocated time.")
         draw_initial_map(city_coords, start_city)
         st.stop()
+    else:
+        routes, polylines, total_cost = res
+    st.session_state.last_routes = routes
+    st.session_state.last_polylines = polylines
+    st.session_state.last_cost = total_cost
+    draw_route_map(city_coords, start_city, polylines)
+    draw_table(st.session_state.last_routes, st.session_state.last_cost,
+               min(r['time_limit_hrs'] for r in chunks))
 else:
     draw_initial_map(city_coords, start_city)

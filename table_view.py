@@ -256,15 +256,16 @@ def draw_table(routes, total_cost, time_limit):
             i += 1
 
     # Formatăm coloanele oră/minute
-    df: pd.DataFrame = pd.DataFrame(all_rows)
+    df = pd.DataFrame(all_rows)
     df["Vehicle_label"] = df["Vehicle"].apply(
         lambda v: v["nume"] if isinstance(v, dict) and "nume" in v else str(v)
     )
     df = df.drop(columns=["Vehicle"])  # elimină dicturile
     df = df.rename(columns={"Vehicle_label": "Vehicle"})
+    print(df["Vehicle"].head())
 
     col_order = ["Step", "Vehicle", "Description", "City", "Distance (km)", "Time elapsed (h)", "Time left (h)", "On time?"]
-    df = pd.DataFrame(df[[col for col in col_order if col in df.columns]])
+    df = df[[col for col in col_order if col in df.columns]]
 
     for col in ["Time elapsed (h)", "Time left (h)"]:
         df[col] = df[col].apply(format_time_hhmm)
@@ -310,17 +311,9 @@ def draw_table(routes, total_cost, time_limit):
         unsafe_allow_html=True
     )
 
-    # Calculate total distance, Pyright-friendly
-    dist_col = df["Distance (km)"].replace({"": 0, "-": 0})
-    distances = pd.to_numeric(dist_col, errors="coerce")
-
-    # Ensure we have a Series for fillna/astype
-    if not isinstance(distances, pd.Series):
-        distances = pd.Series(distances)
-
-    distances = distances.fillna(0).astype(float)
-    dist_total: float = float(distances.sum())
+    dist_total = pd.to_numeric(df["Distance (km)"].replace({"": 0, "-": 0}), errors="coerce").fillna(0).sum()
     st.markdown(f"**Estimated total distance:** `{round(dist_total, 2)} km`")
+    st.markdown(f"**Vehicles used:** `{vehicule_folosite}`")
 
     if late_deliveries:
         # Curăță numele vehiculului și formatează Delay(h) în HH:MM
@@ -364,7 +357,7 @@ def draw_table(routes, total_cost, time_limit):
 
     # Export Excel
     output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:  # type: ignore
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, sheet_name='Routing', index=False)
         if late_deliveries:
             pd.DataFrame(late_deliveries).to_excel(writer, sheet_name='Delays', index=False)
