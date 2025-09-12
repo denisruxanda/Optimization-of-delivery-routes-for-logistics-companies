@@ -5,7 +5,7 @@ from folium.plugins import AntPath, Fullscreen
 
 __all__ = ["draw_initial_map", "draw_route_map"]
 
-# default map center (RO)
+# default map center
 MAP_CENTER = [45.9432, 24.9668]
 DEFAULT_ZOOM = 7
 MARKER_DEPOT_COLOR = "green"
@@ -32,7 +32,7 @@ def draw_initial_map(city_coords, start_city):
     st_folium(m, width=1024, height=640)
 
 def draw_route_map(city_coords, start_city, polylines):
-    # map with markers + animated polylines (one per vehicle)
+    # map with markers + animated polylines 
     m = folium.Map(location=MAP_CENTER, zoom_start=DEFAULT_ZOOM)
     Fullscreen(position='topright').add_to(m)
     _add_markers(m, city_coords, start_city)

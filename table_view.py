@@ -5,7 +5,7 @@ from io import BytesIO
 
 __all__ = ["draw_table"]
 
-# ---- constants (no magic numbers) ----
+# ---- constants ----
 SERVICE_TIME = 2.0                # h per pickup/delivery
 DRIVER_BREAK_ = 0.75              # 45 min
 SINGLE_DRIVER_DAILY_LIMIT = 9
@@ -65,7 +65,6 @@ def _html_status(slack):
         return "-"
 
 def _find_delivery_deadline(steps, start_idx, order_id):
-    # find the delivery deadline for the same order, ahead in the route
     for j in range(start_idx + 1, len(steps)):
         sp = steps[j] or {}
         if sp.get("tip") == "delivery":
@@ -77,7 +76,6 @@ def _find_delivery_deadline(steps, start_idx, order_id):
     return None
 
 def _nearest_future_deadline(steps, cur_idx, onboard_deadlines, last_delivery_idx):
-    # min between active onboard deadlines and any upcoming pickup/delivery deadline
     cands = []
     if onboard_deadlines:
         cands.extend([float(v) for v in onboard_deadlines.values() if isinstance(v, (int, float))])
@@ -106,7 +104,6 @@ def _add_row(rows, step_no, veh, descr, city, dist_km, elapsed, time_left, ontim
         "On time?": ontime_html
     })
 
-# ---------- main ----------
 def draw_table(routes, _total_cost, _deprecated_time_limit):
     if not routes:
         st.warning("No routes to display.")
@@ -134,10 +131,10 @@ def draw_table(routes, _total_cost, _deprecated_time_limit):
         since_rest = 0.0
         since_apt = 0.0
 
-        # active deadlines for onboard orders (order_id -> absolute hour)
+        # active deadlines for onboard orders
         onboard = {}
 
-        # Depart depot (from t=0) — show time left vs nearest future deadline
+        # Depart depot
         active_deadline = _nearest_future_deadline(steps, 1, onboard, last_del_idx)
         slack0 = None if last_del_idx == -1 else (None if active_deadline is None else (active_deadline - t))
         _add_row(rows, step_no, veh_label, "Depart depot", steps[0].get("oras", ""), "-", t,
@@ -156,10 +153,9 @@ def draw_table(routes, _total_cost, _deprecated_time_limit):
 
             rest_limit, apt_limit = _driver_limits(veh, rests_done)
 
-            # show time columns until the last delivery (inclusive)
+            # show time columns until the last delivery
             show_time_now = (i <= last_del_idx) if last_del_idx != -1 else True
-
-            # -------- unified pre-leg checks: aptitude rest > daily rest > 45m break --------
+ 
             while True:
                 apt_needed = (since_apt + dur) > apt_limit
                 rest_needed = (since_rest + dur) > rest_limit
@@ -222,9 +218,8 @@ def draw_table(routes, _total_cost, _deprecated_time_limit):
                     step_no += 1
                     continue
 
-                break  # no more pre-leg actions needed
+                break  
 
-            # ---------- drive leg ----------
             t += dur
             since_break += dur
             since_rest += dur
@@ -240,7 +235,7 @@ def draw_table(routes, _total_cost, _deprecated_time_limit):
             else:
                 descr = "Transit"
 
-            # at pickup: register deadline for this order (fallback to its delivery deadline)
+            # at pickup: registers deadline for this order 
             if tip_pas == "pickup":
                 dl = pas.get("time_limit", None)
                 if not isinstance(dl, (int, float)):
@@ -248,7 +243,7 @@ def draw_table(routes, _total_cost, _deprecated_time_limit):
                 if isinstance(dl, (int, float)) and oid != "":
                     onboard[oid] = float(dl)
 
-            # compute time left for this row (global nearest deadline until last delivery)
+            # computes time left for this row 
             time_left_cell = "-"
             ontime_cell = "-"
             if show_time_now:
@@ -258,7 +253,7 @@ def draw_table(routes, _total_cost, _deprecated_time_limit):
                     time_left_cell = slack
                     ontime_cell = _html_status(slack)
 
-            # for delivery row, also check lateness vs its own deadline (for delay details)
+            # for delivery row, also checks lateness vs its own deadline
             if tip_pas == "delivery":
                 own_dl = pas.get("time_limit", onboard.get(oid, None))
                 if isinstance(own_dl, (int, float)):
@@ -269,7 +264,7 @@ def draw_table(routes, _total_cost, _deprecated_time_limit):
             _add_row(rows, step_no, veh_label, descr, city, dist, t, time_left_cell, ontime_cell)
             step_no += 1
 
-            # ---------- service time at pickup/delivery ----------
+            # service time at pickup/delivery
             if tip_pas in ("pickup", "delivery"):
                 t += SERVICE_TIME
                 since_break = 0.0
@@ -279,7 +274,7 @@ def draw_table(routes, _total_cost, _deprecated_time_limit):
                 if tip_pas == "delivery" and oid in onboard:
                     del onboard[oid]
 
-                # special case: delivery in depot city & this is the last delivery -> Arrive depot instead of Depart order
+                # special case: delivery in depot city 
                 if tip_pas == "delivery" and i == last_del_idx and city == depot_city:
                     _add_row(rows, step_no, veh_label, "Arrive depot", city, "-", t, "-", "-")
                     step_no += 1
@@ -301,16 +296,48 @@ def draw_table(routes, _total_cost, _deprecated_time_limit):
 
             i += 1
 
-    # ---------- render ----------
+    # render
     df = pd.DataFrame(rows)
     col_order = ["Step", "Vehicle", "Description", "City", "Distance (km)", "Time elapsed (h)", "Time left (h)", "On time?"]
     df = df[[c for c in col_order if c in df.columns]]
 
     st.subheader("📋 Routing Table")
-    st.write(
-        df.to_html(escape=False, index=False, col_space=TABLE_COL_SPACE, justify="center"),
-        unsafe_allow_html=True
+    df = pd.DataFrame(rows)
+    col_order = ["Step", "Vehicle", "Description", "City", "Distance (km)",
+                "Time elapsed (h)", "Time left (h)", "On time?"]
+    df = df[[c for c in col_order if c in df.columns]]
+
+    df["On time (flag)"] = df["On time?"].astype(str).str.contains("YES")
+    df["On time?"] = df["On time (flag)"].map({True: "YES", False: "NO"})
+
+    st.subheader("📋 Routing Table")
+
+    with st.expander("Filters", expanded=False):
+        sel_veh = st.multiselect("Vehicle", sorted(df["Vehicle"].unique()))
+        sel_city = st.multiselect("City", sorted(df["City"].unique()))
+        sel_status = st.multiselect("Status", ["On time", "Late"])
+        if sel_veh:   df = df[df["Vehicle"].isin(sel_veh)]
+        if sel_city:  df = df[df["City"].isin(sel_city)]
+        if sel_status:
+            want = {"On time": True, "Late": False}
+            df = df[df["On time (flag)"].isin([want[s] for s in sel_status])]
+
+    st.dataframe(
+        df.drop(columns=["On time (flag)"]),
+        use_container_width=True,
+        hide_index=True
     )
+
+    total_km = pd.to_numeric(df["Distance (km)"].replace({"": 0, "-": 0}),
+                            errors="coerce").fillna(0).sum()
+    st.markdown(f"**Estimated total distance:** `{round(total_km, DECIMALS_KM)} km`")
+    st.markdown(f"**Vehicles used:** `{len(routes)}`")
+
+    if (~df["On time (flag)"]).any():
+        st.subheader("📊 Delay details")
+        st.dataframe(pd.DataFrame(late), use_container_width=True)
+    else:
+        st.success("✅ All deliveries on time")
 
     total_km = pd.to_numeric(df["Distance (km)"].replace({"": 0, "-": 0}), errors="coerce").fillna(0).sum()
     st.markdown(f"**Estimated total distance:** `{round(total_km, DECIMALS_KM)} km`")

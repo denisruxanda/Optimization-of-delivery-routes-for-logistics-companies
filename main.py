@@ -5,7 +5,7 @@ from map_view import draw_initial_map, draw_route_map
 from table_view import draw_table
 import json
 
-# ---- defaults / UI constants ----
+# constants
 DEFAULT_VEHICLE_NAME = "Truck"
 DEFAULT_VEHICLE_CAPACITY_KG = 25000
 VEHICLE_CAPACITY_STEP_KG = 100
@@ -23,7 +23,7 @@ def load_road_data(path):
 
 st.set_page_config(page_title="Delivery Route Optimization", layout="wide")
 
-# ---- state ----
+# state
 if "vehicle_profiles" not in st.session_state:
     st.session_state.vehicle_profiles = []
 if "edit_vehicle_index" not in st.session_state:
@@ -43,14 +43,14 @@ if "routes_generated" not in st.session_state:
 if "allow_split" not in st.session_state:
     st.session_state.allow_split = True
 
-# ---- data ----
+# data
 city_coords = load_coordinates("coords.json")
 road_data = load_road_data("roads.json")
 cities = [c for c, v in city_coords.items() if v.get("visible", False)]
 placeholder = "Select from the list or type"
 cities_placeholder = [placeholder] + cities
 
-# ---- depot ----
+# depot
 selected_hq = st.sidebar.selectbox("Depot", options=cities_placeholder, index=0, key="hq_select")
 start_city = None if selected_hq == placeholder else selected_hq
 
@@ -229,7 +229,7 @@ if st.sidebar.button("Reset", use_container_width=True):
     st.session_state.edit_vehicle_index = -1
     st.rerun()
 
-# ---- main ----
+# main
 st.title("Optimization of delivery routes for logistics companies")
 if not start_city:
     st.info("Please select Depot first.")
@@ -267,7 +267,7 @@ else:
         rr['id'] = oid
         chunks.append(rr)
 
-# expand fleet into actual physical units (NO virtual multiplication)
+# expand fleet into actual physical units
 profile_expanded = []
 for vp in sorted(st.session_state.vehicle_profiles, key=lambda v: v['capacitate']):
     for _ in range(vp['numar']):
@@ -282,12 +282,12 @@ if st.session_state.routes_generated:
         start_city=start_city,
         pd_requests=chunks,
         coords=city_coords,
-        vehicle_profiles=profile_expanded,   # exact number of trucks (e.g., 2)
+        vehicle_profiles=profile_expanded,   # exact number of trucks
         routing_mode=mode,                   # "Fast" => time, "Economic" => distance
         allow_split=st.session_state.allow_split
     )
 
-    # overwrite last result (no accumulation between runs)
+    # overwrite last result
     st.session_state.last_routes = routes
     st.session_state.last_polylines = polylines
     st.session_state.last_cost = total_cost

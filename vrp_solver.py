@@ -4,7 +4,7 @@ from graph_builder import build_graph, get_distance, get_duration, get_path
 
 __all__ = ["solve_vrp"]
 
-# ---- constants ----
+# constants
 SECONDS_PER_HOUR = 3600
 METERS_PER_KM = 1000
 DEFAULT_SERVICE_TIME = 2           # hours (service at pickup/delivery)
@@ -18,7 +18,7 @@ FALLBACK_SPEED_KMPH = 60           # used if graph has no path
 VEHICLE_STARTUP_COST_KM = 200      # penalty to open a vehicle when cost=distance
 VEHICLE_STARTUP_COST_HOURS = 2     # penalty to open a vehicle when cost=time
 
-# ---- helpers ----
+# helpers
 def _haversine_km(a, b):
     R = 6371.0
     lat1, lon1 = map(radians, a)
@@ -66,10 +66,10 @@ def _expand_leg_to_steps(G, coords, a, b, step_type_on_arrival, order_meta=None)
             if order_meta:
                 oid = order_meta.get('id')
                 row['order_id'] = oid
-                row['comanda'] = oid                 # backward-compat UI
+                row['comanda'] = oid
                 row['order_pickup'] = order_meta.get('pickup')
                 row['order_delivery'] = order_meta.get('delivery')
-                # include deadline on BOTH pickup and delivery, so the table knows it early
+                # including deadline on BOTH pickup and delivery, so the table knows it early
                 row['time_limit'] = order_meta.get('time_limit_hrs')
 
         steps.append(row)
@@ -84,7 +84,7 @@ def _estimate_leg_hours(G, coords, a, b):
         d = _haversine_km(pa, pb)
         return d / max(FALLBACK_SPEED_KMPH, 1e-6)
 
-# ---- solver (PUBLIC) ----
+# solver
 def solve_vrp(start_city, pd_requests, coords, vehicle_profiles, routing_mode, allow_split=True, src_map=None):
     pickups = [r['pickup'] for r in pd_requests]
     deliveries = [r['delivery'] for r in pd_requests]
@@ -109,7 +109,7 @@ def solve_vrp(start_city, pd_requests, coords, vehicle_profiles, routing_mode, a
     vehicle_count = max(1, len(vehicle_profiles))
     capacities = [vp['capacitate'] for vp in vehicle_profiles] if vehicle_profiles else [10**9]
 
-    # node list: depot + (pickup, delivery)*
+    # node list: depot + (pickup, delivery)
     node_list = [start_city]
     node_types = ['depot']
     order_idx = [-1]
@@ -169,7 +169,6 @@ def solve_vrp(start_city, pd_requests, coords, vehicle_profiles, routing_mode, a
             cap_dim.CumulVar(manager.NodeToIndex(p)) <= cap_dim.CumulVar(manager.NodeToIndex(d))
         )
 
-    # time dimension (travel + service-at-from), relaxed
     svc = [int(DEFAULT_SERVICE_TIME * SECONDS_PER_HOUR)] * N
     def full_time_cb(from_index, to_index):
         fi = manager.IndexToNode(from_index); ti = manager.IndexToNode(to_index)
@@ -195,7 +194,7 @@ def solve_vrp(start_city, pd_requests, coords, vehicle_profiles, routing_mode, a
 
     solution = routing.SolveWithParameters(p)
 
-    # ---------- fallback (chained, per-vehicle) ----------
+    # fallback (chained, per-vehicle)
     if not solution:
         routes, polylines = [], []
         vcount = vehicle_count or 1
@@ -251,7 +250,7 @@ def solve_vrp(start_city, pd_requests, coords, vehicle_profiles, routing_mode, a
 
         return routes, polylines, 0.0
 
-    # ---------- extract OR-Tools solution ----------
+    # extract OR-Tools solution 
     routes, polylines, total_cost = [], [], 0.0
     for vid in range(vehicle_count):
         index = routing.Start(vid)
